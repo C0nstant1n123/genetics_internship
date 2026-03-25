@@ -1,0 +1,50 @@
+# ==============================================================================
+# BioKan — .gitignore
+# ==============================================================================
+
+# Données de simulation (trop volumineuses — 700+ MB)
+outputs/
+*.jld2
+*.jld
+
+# Plots et figures générés
+plots/
+*.png
+*.svg
+*.pdf
+*.eps
+
+# Logs SLURM / exécution
+logs/
+*.log
+*.out
+*.err
+
+# Librairie locale RateDistortion (dépendance externe, non versionnée ici)
+lib/
+
+# Dossier inputs vide
+inputs/
+
+# Julia
+Manifest.toml
+*.ji
+*.so
+*.dylib
+*.dll
+
+# macOS
+.DS_Store
+**/.DS_Store
+.AppleDouble
+.LSOverride
+
+# Éditeurs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environnements Julia locaux
+.julia/
