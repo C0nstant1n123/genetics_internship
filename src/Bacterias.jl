@@ -364,19 +364,19 @@ module Bacterias
 
 
     function create_hebbian_model(name::Symbol)
-        @parameters t n v_max_D v_max_M v_max_I v_max_C v_max_T v_max_E_ext v_max_inhib K_MD K_ID K_DM K_IM K_EeM K_EiM K_MI K_MC K_MT K_MEe K_IC k_transl k_deg_mRNA k_deg_D k_deg_M k_deg_I k_deg_C k_deg_E_ext k_deg_E_int v_max_diff_D v_max_diff_E_ext v_max_diff_C  K_D_diff k_echo_int
+        @parameters t n v_max_D v_max_M v_max_M2 v_max_I v_max_C v_max_T v_max_E_ext v_max_inhib K_MD K_ID K_DM K_IM K_EeM K_EiM K_MI K_MC K_MT K_MEe K_IC k_transl k_deg_mRNA k_deg_D k_deg_M k_deg_I k_deg_C k_deg_E_ext k_deg_E_int v_max_diff_D v_max_diff_E_ext v_max_diff_C  K_D_diff k_echo_int
         @species D(t) M(t) I(t) C(t) E_int(t) T(t) E_ext(t) D_diff(t) C_diff(t) E_ext_diff(t) mRNA_D(t) mRNA_M(t) mRNA_I(t) mRNA_C(t) mRNA_T(t) mRNA_E_ext(t)
         rxs = [
             #Transcription
             Reaction(v_max_D*(M^n/(K_MD^n +M^n))*(K_ID^n/(K_ID^n+I^n)),nothing,[mRNA_D]),
-            Reaction(v_max_M*(((D^n/(K_DM^n+D^n))*(K_IM^n/(K_IM^n+I^n)))+((E_ext^n/(K_EeM^n+E_ext^n))*(E_int^n/(K_EiM^n+E_int^n)))),nothing,[mRNA_M]),
+            Reaction((v_max_M*((D^n/(K_DM^n+D^n))*(K_IM^n/(K_IM^n+I^n)))+v_max_M2*((E_ext^n/(K_EeM^n+E_ext^n))*(E_int^n/(K_EiM^n+E_int^n)))),nothing,[mRNA_M]),
             Reaction(v_max_I*(M^n/(K_MI^n+M^n)),nothing,[mRNA_I]),
-            Reaction(v_max_C*(M^n/(K_MC^n+M^n)),nothing,[mRNA_C]),
+            Reaction(v_max_C*(I^n/(K_MC^n+I^n)),nothing,[mRNA_C]),
             Reaction(v_max_T*(M^n/(K_MT^n+M^n)),nothing,[mRNA_T]),
             Reaction(v_max_E_ext*(M^n/(K_MEe^n+M^n)),nothing,[mRNA_E_ext]),
             #Echo and inhibition Processes
             Reaction(k_echo_int, [T],[E_int]),
-            Reaction(v_max_inhib*(K_IC^n/(I^n+K_IC^n)),[C,M],[C]),
+            Reaction(v_max_inhib*(K_IC^n/(I^n+K_IC^n)),[C,M],nothing), #[C]
             #Translation
             Reaction(k_transl,[mRNA_D],[mRNA_D,D]),
             Reaction(k_transl,[mRNA_M],[mRNA_M,M]),
@@ -402,69 +402,85 @@ module Bacterias
             Reaction(v_max_diff_E_ext,[E_ext],[E_ext_diff]),
             Reaction(v_max_diff_C,[C],[C_diff])
         ]
-        rs = ReactionSystem(rxs, t, [D, M, I, C, E_int, T, E_ext, D_diff, C_diff, E_ext_diff, mRNA_D, mRNA_M, mRNA_I, mRNA_C, mRNA_T, mRNA_E_ext],[n,v_max_D ,v_max_M ,v_max_I ,v_max_C ,v_max_T ,v_max_E_ext ,v_max_inhib ,K_MD,K_ID,K_DM,K_IM,K_EeM,K_EiM,K_MI,K_MC,K_MT,K_MEe,K_IC,k_transl,k_deg_mRNA,k_deg_D,k_deg_M,k_deg_I,k_deg_C,k_deg_E_ext,k_deg_E_int,v_max_diff_D ,v_max_diff_E_ext ,v_max_diff_C,K_D_diff,k_echo_int]; name=name)
+        rs = ReactionSystem(rxs, t, [D, M, I, C, E_int, T, E_ext, D_diff, C_diff, E_ext_diff, mRNA_D, mRNA_M, mRNA_I, mRNA_C, mRNA_T, mRNA_E_ext],[n,v_max_D ,v_max_M ,v_max_M2 ,v_max_I ,v_max_C ,v_max_T ,v_max_E_ext ,v_max_inhib ,K_MD,K_ID,K_DM,K_IM,K_EeM,K_EiM,K_MI,K_MC,K_MT,K_MEe,K_IC,k_transl,k_deg_mRNA,k_deg_D,k_deg_M,k_deg_I,k_deg_C,k_deg_E_ext,k_deg_E_int,v_max_diff_D ,v_max_diff_E_ext ,v_max_diff_C,K_D_diff,k_echo_int]; name=name)
         p_defaults = [
-            # --- Calibration 2026-03 : cohérente avec burst_circuit ---
-            # Unité de temps = 1 minute, ancre : k_deg_mRNA=0.23 (t½≈3 min)
-            # SS_i = (k_transl/k_deg_mRNA) × v_max_i / k_deg_i = 6.52 × v_max_i / k_deg_i
-            # K ≈ 0.25–0.50 × SS de l'espèce régulatrice
-            #
-            # D_ss  ≈ 284 mol  (v_max=3.0,  k_deg=0.069)
-            # M_ss  ≈ 326 mol  (v_max=0.05, k_deg=1e-3)   ← mémoire lente (t½≈11h)
-            # I_ss  ≈  47 mol  (v_max=0.5,  k_deg=0.069)
-            # C_ss  ≈  98 mol  (v_max=0.3,  k_deg=0.02)
-            # T_ss  ≈ 196 mol  (v_max=0.3,  consommé par k_echo=0.01)
-            # E_ext_ss ≈ 27 mol (v_max=0.5, k_deg+k_sec=0.069+0.05=0.119)
-            # E_int_ss ≈ 98 mol (k_echo×T_ss / k_deg_E_int = 0.01×196/0.02)
-
-            8.0,    # n           — Hill (identique burst, max biologique)
-
-            # v_max transcription
-            3.0,    # v_max_D     — répondeur rapide (comme X burst)
-            0.5,   # v_max_M     — mémoire lente
-            0.5,    # v_max_I     — inhibiteur rapide (était 0.05 → I_ss=1087, trop haut)
-            0.3,    # v_max_C     — consolidation
-            0.5,    # v_max_T     — générateur de trace
-            0.5,    # v_max_E_ext — signal externe
-
-            # v_max inhibition C×M→C  (bimoléculaire, unité : 1/mol/min)
-            # Effet visé : C-clearance de M ≈ 5×k_deg_M quand I=0
-            # → v = 5×k_deg_M×M_ss / (C_ss×M_ss) = 5×1e-3/98 ≈ 5e-5
+            # --- Calibration 2026-03 (défaut) ---
+            8.0,    # n
+            3.0,    # v_max_D
+            0.5,    # v_max_M
+            0.5,    # v_max_M2
+            0.5,    # v_max_I
+            0.3,    # v_max_C
+            0.5,    # v_max_T
+            0.5,    # v_max_E_ext
             5e-3,   # v_max_inhib
+            100.0,  # K_MD
+            100.0,  # K_ID
+            50.0,   # K_DM
+            50.0,   # K_IM
+            15.0,   # K_EeM
+            50.0,   # K_EiM
+            80.0,   # K_MI
+            100.0,  # K_MC
+            100.0,  # K_MT
+            100.0,  # K_MEe
+            25.0,   # K_IC
+            1.5,    # k_transl
+            0.23,   # k_deg_mRNA
+            0.069,  # k_deg_D
+            1e-3,   # k_deg_M
+            0.069,  # k_deg_I
+            0.02,   # k_deg_C
+            0.9,    # k_deg_E_ext
+            0.02,   # k_deg_E_int
+            1.0,    # v_max_diff_D
+            0.5,    # v_max_diff_E_ext
+            0.1,    # v_max_diff_C
+            100.0,  # K_D_diff
+            0.1,    # k_echo_int
 
-            # Seuils (0.25–0.50 × SS de l'espèce régulatrice)
-            100.0,  # K_MD  — 0.31 × M_ss  (M active D)
-            25.0,   # K_ID  — 0.53 × I_ss  (I inhibe D ; était 20 OK)
-            50.0,   # K_DM  — 0.25 × D_ss  (D active M)
-            25.0,   # K_IM  — 0.53 × I_ss  (I inhibe M, voie Hebbian)
-            15.0,   # K_EeM — 0.55 × E_ext_ss (E_ext active M, voie STDP)
-            50.0,   # K_EiM — 0.51 × E_int_ss (E_int active M, voie STDP)
-            80.0,  # K_MI  — 0.31 × M_ss  (M active I ; était 200 → I jamais produit)
-            100.0,  # K_MC  — 0.31 × M_ss  (M active C)
-            100.0,  # K_MT  — 0.31 × M_ss  (M active T)
-            100.0,  # K_MEe — 0.31 × M_ss  (M active E_ext)
-            25.0,   # K_IC  — 0.53 × I_ss  (quand I<K_IC, C dégrade M)
-
-            # Traduction / dégradation mRNA (ancres biologiques)
-            1.5,    # k_transl    — identique burst
-            0.23,   # k_deg_mRNA  — identique burst (t½≈3 min)
-
-            # Dégradation protéines — 3 échelles de temps
-            0.069,  # k_deg_D     — rapide  t½≈10 min  (comme X burst)
-            1e-3,   # k_deg_M     — mémoire t½≈11.5 h  (était 1e-5 → M_ss=32609, absurde)
-            0.069,  # k_deg_I     — rapide  t½≈10 min  (était 3e-4 → I_ss=1087, bloquant)
-            0.02,   # k_deg_C     — moyen   t½≈35 min  (comme Y burst)
-            0.9,  # k_deg_E_ext — rapide  t½≈10 min
-            0.02,   # k_deg_E_int — moyen   t½≈35 min  (fenêtre STDP)
-
-            # Sécrétion
-            1.0,    # v_max_diff_D     — Hill-gatée (identique burst)
-            0.5,   # v_max_diff_E_ext — faible pour garder E_ext_ss≈27 (était 0.5 → E_ext_ss≈6)
-            0.1,    # v_max_diff_C     — lente
-            100.0,  # K_D_diff         — 0.35 × D_ss (était 200, jamais atteint)
-
-            # Echo T→E_int (délai STDP)
-            0.1,   # k_echo_int — t½_E_int = 1/k_deg_E_int = 50 min (était 3e-4 → T_ss=30000)
+            # --- Calibration 2026-04 : issu de CMA-ES eval#49, loss=0.639 (meilleur observé) ---
+            # Différences clés vs calibration 2026-03 :
+            #   - n beaucoup plus élevé (18.5 vs 8) → switch Hill plus abrupt
+            #   - k_transl très faible (0.509 vs 1.5) → production lente
+            #   - k_deg_M légèrement plus rapide (4.4e-3 vs 1e-3) → mémoire moins saturante
+            #   - k_deg_I très lent (1.4e-3 vs 0.069) → inhibiteur persistant
+            #   - v_max_inhib très faible (3.2e-5 vs 5e-3) → inhibition C×M quasi nulle
+            #   - v_max_diff_D très faible (7e-3 vs 1.0) → diffusion D locale, pas broadcast
+            #   - K_D_diff faible (0.96 vs 100) → D sécrété dès les premiers spikes
+            #
+            # 18.49,  # n
+            # 1.74,   # v_max_D
+            # 0.138,  # v_max_M
+            # 0.202,  # v_max_I
+            # 1.430,  # v_max_C
+            # 0.199,  # v_max_T
+            # 0.089,  # v_max_E_ext
+            # 3.17e-5,# v_max_inhib
+            # 10.0,   # K_MD
+            # 7.24,   # K_ID
+            # 26.46,  # K_DM
+            # 82.53,  # K_IM
+            # 3.44,   # K_EeM
+            # 13.79,  # K_EiM
+            # 238.82, # K_MI
+            # 31.53,  # K_MC
+            # 13.99,  # K_MT
+            # 298.68, # K_MEe
+            # 133.92, # K_IC
+            # 0.509,  # k_transl
+            # 0.287,  # k_deg_mRNA
+            # 0.287,  # k_deg_D
+            # 4.38e-3,# k_deg_M
+            # 1.39e-3,# k_deg_I
+            # 1.10e-3,# k_deg_C
+            # 0.500,  # k_deg_E_ext
+            # 0.354,  # k_deg_E_int
+            # 6.97e-3,# v_max_diff_D
+            # 0.493,  # v_max_diff_E_ext
+            # 4.09e-3,# v_max_diff_C
+            # 0.961,  # K_D_diff
+            # 16.80,  # k_echo_int
         ]
         return(complete(rs),p_defaults)
     

@@ -16,7 +16,7 @@ end
 # 1. Paramètres généraux
 # ==============================================================================
 
-n_bacteries    = 3
+n_bacteries    = 16
 distance_comm  = 0.1
 dt             = 1/10
 total_steps    = Int(5000.0 / dt)
@@ -26,7 +26,7 @@ R_cell         = 0.5e-6
 #   B1 reçoit des bursts sur D  (signal "pré-synaptique")
 #   B3 reçoit des bursts sur E_ext (signal "post-synaptique")
 #   → coïncidence sur B2 devrait potentialiser M (règle STDP)
-input_node_D     = [1]
+input_node_D     = [1,3]
 input_node_E_ext = []
 
 # ==============================================================================
@@ -119,18 +119,23 @@ u0_dict_raw = Dict(
     :mRNA_C => 0.0, :mRNA_T => 0.0, :mRNA_E_ext => 0.0
 )
 u0_dict = map_symbols_to_species(circuit, u0_dict_raw)
-
+"
 b1 = Bacterium(1, [0.003100, 0.005], circuit, params_dict, u0_dict; mode=:ssa)
-b2 = Bacterium(2, [0.003102, 0.005], circuit, params_dict, u0_dict; mode=:ssa)
-b3 = Bacterium(3, [0.003104, 0.005], circuit, params_dict, u0_dict; mode=:ssa)
+b2 = Bacterium(2, [0.003101, 0.005], circuit, params_dict, u0_dict; mode=:ssa)
+b3 = Bacterium(3, [0.003102, 0.005], circuit, params_dict, u0_dict; mode=:ssa)
 
 add_bacterium!(net, b1)
 add_bacterium!(net, b2)
 add_bacterium!(net, b3)
 
 build_edges!(net)
-println("Réseau : $(length(net.nodes)) bactéries.")
-println("Distance B1->B2 : $(net.edges[2])")
+"
+#println("Réseau : $(length(net.nodes)) bactéries.")
+#println("Distance B1->B2 : $(net.edges[2])")
+
+
+net = build_network_square!(net, n_bacteries, distance_comm, 10, circuit, params_dict, u0_dict, :ssa; sigma=0.001)
+plot_bionetwork(net)
 
 # ==============================================================================
 # 4. Simulation

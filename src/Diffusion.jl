@@ -107,8 +107,8 @@ module Diffusion
 
 
 
-    """
-    Génère les poids de couplage statiques.
+        """
+    Génère les poids de couplage statiques (Probabilité d'atteinte par mouvement Brownien 3D).
     """
     function compute_static_coupling_physics(edges, D_dict, Gamma_dict, species_list, R_cell, dt)
         n_species = length(species_list)
@@ -120,21 +120,28 @@ module Diffusion
             for (s_idx, s_name) in enumerate(species_list)
                 D = D_dict[s_name]
                 Gamma = Gamma_dict[s_name]
-                
-                if D <= 1e-40
+
+                # Si l'espèce ne diffuse pas, ou si on regarde la bactérie elle-même
+                if D <= 1e-40 || id_s == id_t
                     W_edge[s_idx] = 0.0
-
-
-                else 
-                    if id_s == id_t
-                        W_edge[s_idx] = 0.0
-                    else
-                        eff_dist = max(dist_r, 2.0 * R_cell) 
-                        attenuation = (R_cell / eff_dist) * exp(-Gamma*dt)
-                        W_edge[s_idx] = min(1.0, attenuation)
-                    end
+                else
+                    # Distance centre-à-centre (minorée pour éviter les divisions par zéro)
+                    eff_dist = max(dist_r, 2.0 * R_cell) 
+                    
+                    # Longueur de diffusion (distance moyenne parcourue avant dégradation)
+                    # Si Gamma est nul, la molécule ne se dégrade jamais (lambda infini)
+                    lambda_diff = (Gamma > 0.0) ? sqrt(D / Gamma) : Inf
+                    
+                    # PROBABILITÉ BROWNIENNE 3D d'une molécule (Loi en 1/r + dégradation spatiale)
+                    # La probabilité de heurter une sphère de rayon R_cell à une distance eff_dist
+                    p_hit = (R_cell / eff_dist) * exp(-(eff_dist - R_cell) / lambda_diff)
+                    
+                    # On s'assure que la probabilité reste mathématiquement valide[0, 1]
+                    W_edge[s_idx] = clamp(p_hit, 0.0, 1.0)
                 end
             end
+            
+            # On ne stocke l'arête que s'il y a au moins une molécule qui peut diffuser
             if sum(W_edge) > 0.0
                 weights[(id_s, id_t)] = W_edge
             end
@@ -143,28 +150,31 @@ module Diffusion
     end
 
     """
-    Propage les signaux instantanément.
+    Propage les signaux instantanément (Tirage stochastique exact pour N discret).
     """
     function propagate_signals_instantaneous!(weights, flux_emissions, n_bacteries, n_species)
         received_signals = zeros(Float64, n_bacteries, n_species)
 
         for ((id_s, id_t), W_vec) in weights
-            
+
             for s in 1:n_species
-                w = W_vec[s]
+                w = W_vec[s] # 'w' est maintenant la probabilité d'atteinte P_hit
                 if w > 0.0
                     amount_leaving = flux_emissions[id_s, s]
-                    
+
                     if amount_leaving > 0.0
-                        received = rand(Binomial(ceil(Int, amount_leaving), w))
+                        # On s'assure d'avoir un nombre entier de molécules qui partent
+                        n_molecules = ceil(Int, amount_leaving)
                         
+                        # Tirage stochastique : chaque molécule a une chance 'w' d'arriver
+                        received = rand(Binomial(n_molecules, w))
+
                         received_signals[id_t, s] += received
                     end
                 end
             end
         end
-        
+
         return received_signals
     end
-
 end

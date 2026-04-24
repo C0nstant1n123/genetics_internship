@@ -35,7 +35,8 @@ function get_base_config()
         ),
         :env => Dict(
             :D_defaults => Dict(:X => 0.0, :Y => 0.0, :Y_trans => 0.0, :Z => 0.0, :mRNA => 0.0),
-            :gamma_defaults => Dict(:X => 2.9e-3, :Y => 2.9e-3, :Y_trans => 2.9e-3, :Z => 2.9e-3, :mRNA => 0.0)
+            :gamma_defaults => Dict(:X => 2.9e-3, :Y => 2.9e-3, :Y_trans => 2.9e-3, :Z => 2.9e-3, :mRNA => 0.0),
+            #:Diff_targets => Dict(:X_diff => :X, ...)
         ),
         :bio_params => Dict(
             :k_deg_X_ref => 9e-5,
@@ -124,7 +125,8 @@ function build_final_configs()
         for replica_idx in 1:N_REPLICAS
             config = deepcopy(base)
 
-            # Re-création propre des réseaux Catalyst
+            # On construit les circuits temporairement pour extraire les valeurs numériques
+            # des paramètres APRÈS application du sweep — puis on jette le ReactionSystem.
             rn_input, p_vec_input = create_empty_rn(:source)
             rn_output, p_vec_output = create_empty_rn(:receiver)
 
@@ -133,7 +135,7 @@ function build_final_configs()
                 :receiver => Dict(parameters(rn_output) .=> p_vec_output)
             )
 
-            # Application des paramètres
+            # Application des paramètres de sweep
             apply_sweep_logic!(config, params_dicts, :ratio_input, config[:bio_params][:ratio_input])
 
             meta_data = Dict()
@@ -142,15 +144,18 @@ function build_final_configs()
                 meta_data[key] = val
             end
 
-            # Assemblage Final
+            # Extraction des valeurs numériques seules (Vector{Float64})
+            # L'ordre est garanti par parameters(rn_*) — le worker doit utiliser le même circuit
+            p_values_source = [params_dicts[:source][k] for k in parameters(rn_input)]
+            p_values_receiv = [params_dicts[:receiver][k] for k in parameters(rn_output)]
+
+            # Assemblage Final — SANS ReactionSystem dans le Dict
             final_config = Dict(
                 :id => global_counter,
                 :group_id => group_idx,
                 :replica_id => replica_idx,
                 :seed => rand(UInt64),
-                
-                # C'est ici qu'on stocke le nom du dossier pour le Runner
-                :folder_name => folder_name, 
+                :folder_name => folder_name,
 
                 :meta => meta_data,
                 :sim => config[:sim],
@@ -158,8 +163,10 @@ function build_final_configs()
                 :env => config[:env],
                 :biology => Dict(
                     :species_names => [:X, :Y, :Y_trans, :Z, :mRNA],
-                    :circuits => Dict(:source => rn_input, :receiver => rn_output),
-                    :parameters => Dict(:source => params_dicts[:source], :receiver => params_dicts[:receiver]),
+                    # Types de circuits (Symbol léger) — le worker recrée le ReactionSystem
+                    :circuit_types => Dict(:source => :hill_repeater_input, :receiver => :hill_repeater_output),
+                    # Valeurs numériques seulement (Vector{Float64}, quelques centaines d'octets)
+                    :param_values => Dict(:source => p_values_source, :receiver => p_values_receiv),
                     :u0 => Dict(:source => config[:bio_params][:u0_source], :receiver => config[:bio_params][:u0_receiv])
                 )
             )
