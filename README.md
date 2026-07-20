@@ -2,13 +2,25 @@
 
 # 🧫 BioKan
 
-**Learning in bacterial communication networks — simulated cell by cell.**
+**KAN-inspired unsupervised learning in a bacterial consortium.**
 
-Each cell runs a stochastic gene-regulatory circuit (a [Catalyst](https://docs.sciml.ai/Catalyst/stable/)
-reaction network integrated with the Gillespie SSA); cells couple through the
-physical diffusion of signalling molecules; and an internal memory species
-implements a Hebbian plasticity rule — letting a colony *learn* associations and
-logic gates.
+[Kolmogorov–Arnold Networks (KANs)](https://arxiv.org/abs/2404.19756) replace a
+neural network's fixed neurons with *learnable functions on its edges*. **BioKan
+asks whether that idea can be embodied in living matter: can a consortium of
+engineered bacteria, with no central controller, learn to compute?**
+
+Here every cell is a small gene-regulatory circuit. Cells talk to one another only
+through **diffusing signalling molecules** (a quorum-sensing-like channel), and each
+cell carries an internal *synaptic weight* that is adjusted **locally and without a
+supervisor**, by a molecular Hebbian coincidence rule — the biological counterpart of
+a learnable edge. The scientific question is whether such purely local plasticity,
+distributed over a spatial community, is enough for the colony to **self-organize into
+a working computation**.
+
+This repository demonstrates it *in silico*: a stochastic
+([Catalyst](https://docs.sciml.ai/Catalyst/stable/) / Gillespie) simulation of the
+consortium is trained, by teacher forcing, to perform **associative (Pavlovian)
+conditioning** and to realise the full family of **two-input Boolean logic gates**.
 
 📄 **[Read the internship report (PDF)](report/rapport_DEUMIER_Constantin.pdf)**
 
