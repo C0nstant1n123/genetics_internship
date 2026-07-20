@@ -13,6 +13,8 @@ plots/
 *.svg
 *.pdf
 *.eps
+# …sauf le rapport de stage, versionné dans report/
+!report/rapport_DEUMIER_Constantin.pdf
 
 # Logs SLURM / exécution
 logs/
