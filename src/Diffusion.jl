@@ -27,7 +27,7 @@ module Diffusion
     using Distributions
     using ..BioNetworks
 
-    export compute_diffusion_kernels_physics, update_diffusion!, compute_static_coupling_physics, propagate_signals_instantaneous!
+    export compute_diffusion_kernels_physics, update_diffusion!, compute_static_coupling_physics, propagate_signals_instantaneous!, compute_fpt_kernels, propagate_signals_delayed!
 
 
 
@@ -151,25 +151,21 @@ module Diffusion
 
     """
     Propage les signaux instantanément (Tirage stochastique exact pour N discret).
+    Version in-place : remplit `received_signals` (buffer pré-alloué), évite toute allocation.
     """
-    function propagate_signals_instantaneous!(weights, flux_emissions, n_bacteries, n_species)
-        received_signals = zeros(Float64, n_bacteries, n_species)
+    function propagate_signals_instantaneous!(received_signals::Matrix{Float64},
+                                              weights, flux_emissions,
+                                              _n_bacteries, n_species)
+        fill!(received_signals, 0.0)
 
         for ((id_s, id_t), W_vec) in weights
-
             for s in 1:n_species
-                w = W_vec[s] # 'w' est maintenant la probabilité d'atteinte P_hit
+                w = W_vec[s]
                 if w > 0.0
                     amount_leaving = flux_emissions[id_s, s]
-
                     if amount_leaving > 0.0
-                        # On s'assure d'avoir un nombre entier de molécules qui partent
                         n_molecules = ceil(Int, amount_leaving)
-                        
-                        # Tirage stochastique : chaque molécule a une chance 'w' d'arriver
-                        received = rand(Binomial(n_molecules, w))
-
-                        received_signals[id_t, s] += received
+                        received_signals[id_t, s] += rand(Binomial(n_molecules, w))
                     end
                 end
             end
@@ -177,4 +173,153 @@ module Diffusion
 
         return received_signals
     end
+
+    """
+    Compatibilité : version sans buffer — alloue une matrice (utiliser de préférence la version in-place).
+    """
+    function propagate_signals_instantaneous!(weights, flux_emissions, n_bacteries, n_species)
+        received_signals = zeros(Float64, n_bacteries, n_species)
+        return propagate_signals_instantaneous!(received_signals, weights, flux_emissions,
+                                                n_bacteries, n_species)
+    end
+
+
+    """
+        propagate_signals_delayed!(received, weights_delayed, weights_instant,
+                                   flux_emissions, delay_buffer, ptr, delay_steps, n_species)
+
+    Transport avec délai fixe pour certaines espèces, instantané pour les autres.
+
+    - `weights_delayed` : poids pour les espèces avec délai (D_diff, E_ext_diff, C_diff)
+    - `weights_instant` : poids pour les espèces instantanées (O_diff)
+    - `delay_buffer`    : Array (n_bac, n_species, delay_steps) — buffer circulaire
+    - `ptr`             : pointeur courant dans le buffer (Int)
+    - `delay_steps`     : nombre de pas de délai
+
+    Retourne (received, new_ptr).
+    """
+    function propagate_signals_delayed!(received::Matrix{Float64},
+                                        weights_delayed, weights_instant,
+                                        flux_emissions::Matrix{Float64},
+                                        delay_buffer::Array{Float64,3},
+                                        ptr::Int, delay_steps::Int, n_species::Int)
+        fill!(received, 0.0)
+
+        # Lire d'abord le slot courant (contient ce qui a été écrit il y a delay_steps pas)
+        # puis écraser avec les émissions d'aujourd'hui → délai exact de delay_steps pas
+        for ((id_s, id_t), W_vec) in weights_delayed
+            for s in 1:n_species
+                w = W_vec[s]
+                if w > 0.0
+                    amount = delay_buffer[id_s, s, ptr]
+                    if amount > 0.0
+                        n_mol = ceil(Int, amount)
+                        received[id_t, s] += rand(Binomial(n_mol, w))
+                    end
+                end
+            end
+        end
+
+        # Écrire les émissions courantes dans le slot (écrase l'ancien)
+        delay_buffer[:, :, ptr] .= flux_emissions
+
+        # Propager instantanément les espèces sans délai (O_diff)
+        for ((id_s, id_t), W_vec) in weights_instant
+            for s in 1:n_species
+                w = W_vec[s]
+                if w > 0.0
+                    amount = flux_emissions[id_s, s]
+                    if amount > 0.0
+                        n_mol = ceil(Int, amount)
+                        received[id_t, s] += rand(Binomial(n_mol, w))
+                    end
+                end
+            end
+        end
+
+        new_ptr = mod1(ptr + 1, delay_steps)
+        return received, new_ptr
+    end
+
+
+    """
+        compute_fpt_kernels(edges, D_dict, gamma_dict, species_list, dt, R)
+
+    Calcule le noyau de premier passage (FPT) pour chaque arête du réseau.
+
+    Pour une molécule émise depuis id_s et devant atteindre id_t (rayon R, distance r),
+    la densité de probabilité d'arriver pour la **première fois** au temps τ est :
+
+        K(τ) = (R/r) · (d/√(4πD)) · τ^(-3/2) · exp(−d²/(4Dτ) − γτ)
+
+    où d = r − R est la distance surface-à-surface.
+
+    L'intégrale sur τ ≥ 0 vaut exactement p_hit = (R/r)·exp(−d/λ), λ=√(D/γ),
+    ce qui est identique à `compute_static_coupling_physics` — les deux méthodes sont cohérentes.
+
+    Le noyau K[s, τ] retourné est **multiplié par dt** : c'est la probabilité qu'une molécule
+    émise au temps 0 arrive pendant [τ·dt, (τ+1)·dt]. Il est utilisé directement comme
+    paramètre p du tirage Binomial dans `update_diffusion!`.
+
+    T_max adaptatif : 5/γ_min (parmi les espèces diffusantes), en secondes.
+    """
+    function compute_fpt_kernels(edges, D_dict, gamma_dict, species_list, dt, R; eps_cut=1e-2, T_max_abs=500.0)
+        n_species = length(species_list)
+
+        # Passe 1 : taille du buffer = τ_peak + n_tau_widths / γ
+        # Après τ_peak la queue décroît comme exp(-γτ).
+        # n_tau_widths = nombre de demi-vies qu'on garde (défaut 3 → e^{-3}≈5% du pic).
+        # On prend le pire cas sur toutes les arêtes et espèces diffusantes.
+        n_tau_widths = -log(eps_cut)   # eps_cut=1e-2 → 4.6 demi-vies, 1e-3 → 6.9, etc.
+        n_steps = 1
+        for (_, _, r) in edges
+            for s_name in species_list
+                D = D_dict[s_name]; γ = gamma_dict[s_name]
+                (D <= 1e-40 || γ <= 1e-40) && continue
+                λ = sqrt(D / γ)
+                r_eff = max(r, R + 1e-12)
+                d = max(r_eff - R, 1e-12)
+                τ_peak = (-3.0 + sqrt(9.0 + (2.0*d/λ)^2)) / (4.0 * γ)
+                τ_cut  = τ_peak + n_tau_widths / γ
+                n_steps = max(n_steps, round(Int, τ_cut / dt) + 1)
+            end
+        end
+        n_steps = min(n_steps, round(Int, T_max_abs / dt))
+        t_vec = collect(dt:dt:(n_steps * dt))
+
+        kernels = Dict{Tuple{Int,Int}, Matrix{Float64}}()
+
+        for (id_s, id_t, r) in edges
+            K_edge = zeros(Float64, n_species, n_steps)
+
+            for (s_idx, s_name) in enumerate(species_list)
+                D = D_dict[s_name]
+                γ = gamma_dict[s_name]
+
+                if D <= 1e-40
+                    # Espèce non-diffusante : self-loop = retention totale
+                    id_s == id_t && (K_edge[s_idx, 1] = 1.0)
+                elseif id_s == id_t
+                    # Auto-boucle : retention instantanée (pas de transit)
+                    K_edge[s_idx, 1] = 1.0
+                else
+                    r_eff = max(r, R + 1e-12)
+                    d     = max(r_eff - R, 1e-12)   # distance surface-à-surface
+
+                    # Noyau FPT : (R/r)·(d/√(4πD))·τ^(-3/2)·exp(−d²/(4Dτ) − γτ)
+                    # Multiplié par dt → probabilité par pas de temps
+                    @. K_edge[s_idx, :] = (R / r_eff) * (d / sqrt(4π * D)) *
+                        t_vec^(-1.5) * exp(-d^2 / (4.0 * D * t_vec) - γ * t_vec) * dt
+
+                    # Sécurité numérique (ne doit jamais dépasser 1)
+                    clamp!(view(K_edge, s_idx, :), 0.0, 1.0)
+                end
+            end
+
+            kernels[(id_s, id_t)] = K_edge
+        end
+
+        return kernels, t_vec, n_steps
+    end
+
 end

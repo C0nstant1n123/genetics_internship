@@ -48,3 +48,21 @@ Manifest.toml
 
 # Environnements Julia locaux
 .julia/
+
+# ==============================================================================
+# Scripts de développement / cluster — conservés en local, hors du dépôt public
+# ==============================================================================
+scripts/
+tests/
+experimental/
+
+# Scripts de lancement SLURM et de synchronisation cluster
+*.sbatch
+*.sh
+Manifest.cluster.toml
+
+# Restes LaTeX
+*.aux
+*.fls
+*.fdb_latexmk
+*.synctex.gz

@@ -1,19 +1,20 @@
 module BioNetworks #
     using ..Bacterias
     using Catalyst
-    using LinearAlgebra 
+    using JumpProcesses
+    using LinearAlgebra
     using Plots
 
-    export BioNetwork, add_bacterium!, build_edges!, plot_bionetwork, plot_bionetwork_3d, build_network_square!, build_network_cube!, assign_tetrahedral_roles
+    export BioNetwork, add_bacterium!, build_edges!, plot_bionetwork, plot_bionetwork_3d, build_network_square!, build_network_cube!, assign_tetrahedral_roles, assign_conditioning_roles
 
     mutable struct BioNetwork
-        nodes::Dict{Int, Bacterium}
-        edges::Vector{Tuple{Int, Int, Float64}} 
+        nodes::Dict{Int, Any}   # Any car Bacterium{I} est paramétrique — le type concret est dans valid_nodes
+        edges::Vector{Tuple{Int, Int, Float64}}
         d_max::Float64
-        n_segments::Int 
+        n_segments::Int
 
         function BioNetwork(d_max, n_segments)
-            new(Dict{Int, Bacterium}(), [], d_max, n_segments)
+            new(Dict{Int, Any}(), [], d_max, n_segments)
         end
     end
 
@@ -50,6 +51,28 @@ module BioNetworks #
             end
         end
         println("Graphe construit : $(length(net.edges)) liens créés.")
+    end
+
+    # Surcharge rapide via template SSA — évite la recompilation Catalyst à chaque bactérie.
+    # remake(template) pour chaque bactérie : toutes partagent le même type I concret
+    # → Vector{Bacterium{I}} possible → static dispatch sur step_bacterium!
+    function build_network_cube!(net, n_bacteries, d_max, n_segments,
+                                 circuit::ReactionSystem,
+                                 template::JumpProcesses.JumpProblem; sigma=0.5e-6)
+        grid_size = ceil(Int, n_bacteries^(1/3))
+        spacing   = d_max / n_segments
+        id = 1
+        for i in 0:(grid_size-1), j in 0:(grid_size-1), k in 0:(grid_size-1)
+            id > n_bacteries && break
+            pos = [i*spacing + randn()*sigma,
+                   j*spacing + randn()*sigma,
+                   k*spacing + randn()*sigma]
+            b = Bacterium(id, pos, circuit, template)
+            add_bacterium!(net, b)
+            id += 1
+        end
+        build_edges!(net)
+        return net
     end
 
     function build_network_cube!(net, n_bacteries, d_max, n_segments, circuit, params_dict, u0_dict, mode; sigma=0.5e-6)
@@ -139,12 +162,56 @@ module BioNetworks #
         return node_roles
     end
 
+    # Rôles pour le conditionnement classique (CS+/CS-) :
+    #   Input_A  → coin (min_x, min_y, min_z) — diagonale face inférieure (CS+)
+    #   Input_B  → coin (max_x, max_y, min_z) — coin opposé diagonale     (CS-)
+    #   Output   → centre de la face supérieure
+    function assign_conditioning_roles(net::BioNetwork)
+        ids = collect(keys(net.nodes))
+
+        min_x = minimum(net.nodes[id].pos[1] for id in ids)
+        max_x = maximum(net.nodes[id].pos[1] for id in ids)
+        mid_x = (min_x + max_x) / 2
+        min_y = minimum(net.nodes[id].pos[2] for id in ids)
+        max_y = maximum(net.nodes[id].pos[2] for id in ids)
+        mid_y = (min_y + max_y) / 2
+        min_z = minimum(net.nodes[id].pos[3] for id in ids)
+        max_z = maximum(net.nodes[id].pos[3] for id in ids)
+
+        targets = [
+            (:Input_A, [min_x, min_y, min_z]),
+            (:Input_B, [max_x, max_y, min_z]),
+            (:Output,  [mid_x, mid_y, max_z]),
+        ]
+
+        node_roles = Dict{Symbol, Int}()
+        used_ids   = Set{Int}()
+
+        for (role, target) in targets
+            best_id   = -1
+            best_dist = Inf
+            for id in ids
+                id in used_ids && continue
+                d = norm(net.nodes[id].pos - target)
+                if d < best_dist
+                    best_dist = d
+                    best_id   = id
+                end
+            end
+            node_roles[role] = best_id
+            push!(used_ids, best_id)
+        end
+
+        return node_roles
+    end
+
     function plot_bionetwork_3d(net::BioNetwork, node_roles::Dict{Symbol, Int})
         role_color = Dict(
             :Input_A  => :blue,
             :Input_B  => :orange,
             :Output_0 => :green,
             :Output_1 => :red,
+            :Output   => :teal,
         )
         role_ids = Set(values(node_roles))
 
